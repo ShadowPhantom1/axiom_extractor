@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from aiogram import Bot, Dispatcher
 from config import BOT_TOKEN, TRIGGER_CMD
 from handlers import router
@@ -7,7 +8,14 @@ from handlers import router
 async def boot():
     print("=" * 50)
     print("  📨 AXIOM — Chat Automation Bot")
+    print("  🚀 Hosted on Render")
     print("=" * 50)
+
+    # Startup me token check karo — Render pe crash mat ho silently
+    if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("[✘] BOT_TOKEN environment variable set nahi hai!")
+        print("[!] Render Dashboard → Environment → BOT_TOKEN add karo.")
+        sys.exit(1)
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
