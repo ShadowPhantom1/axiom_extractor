@@ -1,16 +1,13 @@
-from aiogram import Router, F, Bot
-from aiogram.types import Message
+from aiogram import Router, Bot
+from aiogram.types import Message, BusinessConnection
+from aiogram.filters import CommandStart
 from config import TRIGGER_CMD
 
 router = Router()
 
 # ============================================================
-# MEDIA CACHE — Yeh sabse important part hai
-# Jab koi bhi message aata hai Chat Automation se, uska media
-# file_id yahan store ho jaata hai. View-once media bhi pehli
-# baar aane par yahan cache ho jaata hai. Baad me chahe
-# Telegram us media ko delete kar de, humare paas file_id
-# saved rehta hai aur hum usse bhej sakte hain.
+# MEDIA CACHE — Jab media message pehli baar aata hai tab
+# uska file_id yahan store hota hai
 # ============================================================
 media_cache = {}
 
@@ -34,85 +31,109 @@ def _extract_media_info(msg: Message):
     return None, None
 
 
+async def _send_media(bot: Bot, chat_id: int, file_id: str, media_type: str, caption: str):
+    """Media type ke hisaab se bhejo."""
+    if media_type == "photo":
+        await bot.send_photo(chat_id=chat_id, photo=file_id, caption=caption)
+    elif media_type == "video":
+        await bot.send_video(chat_id=chat_id, video=file_id, caption=caption)
+    elif media_type == "gif":
+        await bot.send_animation(chat_id=chat_id, animation=file_id, caption=caption)
+    elif media_type == "document":
+        await bot.send_document(chat_id=chat_id, document=file_id, caption=caption)
+    elif media_type == "video_note":
+        await bot.send_video_note(chat_id=chat_id, video_note=file_id)
+    elif media_type == "voice":
+        await bot.send_voice(chat_id=chat_id, voice=file_id, caption=caption)
+    elif media_type == "sticker":
+        await bot.send_sticker(chat_id=chat_id, sticker=file_id)
+
+
 # ============================================================
-# STEP 1: Har incoming business message ka media cache karo
-# Yeh handler SABSE PEHLE chalta hai — har message par.
-# View-once ho ya normal, file_id yahan store ho jaata hai.
+# /start COMMAND — Bot ke DM me /start karne par response
+# ============================================================
+@router.message(CommandStart())
+async def cmd_start(message: Message):
+    print(f"[✔] /start received from user {message.from_user.id}")
+    await message.answer(
+        "✅ **Axiom Chat Automation Bot is Active!**\n\n"
+        f"🔹 Trigger Command: `{TRIGGER_CMD}`\n"
+        "🔹 Kisi bhi chat me media par reply karke trigger likho\n"
+        "🔹 Media yahan DM me aa jayega!\n\n"
+        "⚠️ Bot ko Chat Automation me add karna mat bhulna:\n"
+        "Settings → Account → Chat Automation",
+        parse_mode="Markdown"
+    )
+
+
+# ============================================================
+# BUSINESS CONNECTION — Jab bot Chat Automation me add/remove ho
+# ============================================================
+@router.business_connection()
+async def on_business_connection(event: BusinessConnection):
+    user = event.user
+    enabled = event.is_enabled
+    status = "CONNECTED" if enabled else "DISCONNECTED"
+    print(f"[🔗] Business {status} | User: {user.first_name} (ID: {user.id})")
+
+
+# ============================================================
+# BUSINESS MESSAGE — Har chat message yahan aata hai
+# Step 1: Media cache karo
+# Step 2: Agar trigger reply hai toh media DM me bhejo
 # ============================================================
 @router.business_message()
-async def cache_all_media(message: Message):
-    """Har aane wale message ka media silently cache karo."""
-    file_id, media_type = _extract_media_info(message)
+async def handle_business_message(message: Message, bot: Bot):
+    print(f"[📩] Business msg received | chat={message.chat.id} | from={message.from_user.id if message.from_user else '?'} | text={message.text or '[media/other]'}")
 
+    # --- STEP 1: Media Cache ---
+    file_id, media_type = _extract_media_info(message)
     if file_id:
-        # Business connection chat_id + message_id se unique key banao
-        cache_key = f"{message.business_connection_id}:{message.message_id}"
+        cache_key = f"{message.chat.id}:{message.message_id}"
         media_cache[cache_key] = {
             "file_id": file_id,
             "type": media_type,
             "sender": message.from_user.id if message.from_user else "Unknown",
         }
-        print(f"[📦] Cached {media_type} → msg {message.message_id}")
+        print(f"[📦] Cached {media_type} | chat={message.chat.id} msg={message.message_id} | cache size={len(media_cache)}")
 
+    # --- STEP 2: Trigger Check ---
+    if message.text and message.text.strip() == TRIGGER_CMD and message.reply_to_message:
+        owner_id = message.from_user.id
+        target = message.reply_to_message
+        target_id = target.message_id
 
-# ============================================================
-# STEP 2: Trigger command detect karo aur media bhejo
-# Jab user kisi message par reply karke .liketect likhe,
-# toh cached file_id se media user ke bot chat me bhej do.
-# ============================================================
-@router.business_message(F.text == TRIGGER_CMD, F.reply_to_message)
-async def on_trigger_extract(message: Message, bot: Bot):
-    """Trigger reply detect karo → cached media bhejo."""
+        print(f"[⚡] TRIGGER DETECTED! owner={owner_id} | target_msg={target_id}")
 
-    owner_id = message.from_user.id
-    target = message.reply_to_message
-    target_id = target.message_id
+        # Pehle cache me dekho
+        cache_key = f"{message.chat.id}:{target_id}"
+        cached = media_cache.get(cache_key)
 
-    # Pehle cache me dekho (view-once media yahan se milega)
-    cache_key = f"{message.business_connection_id}:{target_id}"
-    cached = media_cache.get(cache_key)
+        if cached:
+            t_file_id = cached["file_id"]
+            t_media_type = cached["type"]
+            t_sender = cached["sender"]
+            print(f"[⚡] Cache HIT! {t_media_type}")
+        else:
+            # Cache miss — reply_to_message se try karo
+            t_file_id, t_media_type = _extract_media_info(target)
+            t_sender = target.from_user.id if target.from_user else "Unknown"
 
-    # Agar cache me hai toh cache se bhejo
-    if cached:
-        file_id = cached["file_id"]
-        media_type = cached["type"]
-        sender = cached["sender"]
-        print(f"[⚡] Cache HIT! Extracting {media_type} from msg {target_id}")
+            if not t_file_id:
+                print(f"[✘] NO MEDIA FOUND for msg {target_id} (not in cache, not in reply)")
+                return
 
-    else:
-        # Cache me nahi? Toh reply_to_message se try karo (normal media)
-        file_id, media_type = _extract_media_info(target)
-        sender = target.from_user.id if target.from_user else "Unknown"
+            print(f"[⚡] Cache MISS, using reply_to_message | {t_media_type}")
 
-        if not file_id:
-            print(f"[x] No media found for msg {target_id} (not in cache, not in reply)")
-            return
+        caption = (
+            f"📨 **Chat Automation Extract**\n"
+            f"**Type:** `{t_media_type}`\n"
+            f"**From:** `{t_sender}`"
+        )
 
-        print(f"[⚡] Cache MISS, using reply_to_message for {media_type}")
-
-    caption = (
-        f"📨 **Chat Automation Extract**\n"
-        f"**Type:** `{media_type}`\n"
-        f"**From:** `{sender}`"
-    )
-
-    try:
-        if media_type == "photo":
-            await bot.send_photo(chat_id=owner_id, photo=file_id, caption=caption)
-        elif media_type == "video":
-            await bot.send_video(chat_id=owner_id, video=file_id, caption=caption)
-        elif media_type == "gif":
-            await bot.send_animation(chat_id=owner_id, animation=file_id, caption=caption)
-        elif media_type == "document":
-            await bot.send_document(chat_id=owner_id, document=file_id, caption=caption)
-        elif media_type == "video_note":
-            await bot.send_video_note(chat_id=owner_id, video_note=file_id)
-        elif media_type == "voice":
-            await bot.send_voice(chat_id=owner_id, voice=file_id, caption=caption)
-        elif media_type == "sticker":
-            await bot.send_sticker(chat_id=owner_id, sticker=file_id)
-
-        print(f"[✔] {media_type} → sent to user {owner_id}'s bot chat")
-
-    except Exception as e:
-        print(f"[✘] Send failed (user ne bot /start kiya hai?): {e}")
+        try:
+            await _send_media(bot, owner_id, t_file_id, t_media_type, caption)
+            print(f"[✔] SUCCESS! {t_media_type} → sent to user {owner_id}")
+        except Exception as e:
+            print(f"[✘] SEND FAILED: {e}")
+            print(f"[!] Kya user {owner_id} ne bot ko /start kiya hai?")
