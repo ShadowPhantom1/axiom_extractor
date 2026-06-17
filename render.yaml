@@ -1,12 +1,12 @@
 services:
-  - type: worker          # Background Worker — koi HTTP port nahi chahiye
+  - type: web             # Ab yeh Web Service ban gaya hai
     name: axiom-extractor
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
-    plan: free            # Render ka free plan use karo
+    plan: free            # Render Free Plan
     envVars:
       - key: BOT_TOKEN
-        sync: false       # Render Dashboard se manually set karo (secret)
+        sync: false       
       - key: TRIGGER_CMD
-        value: .liketect  # Ya jo bhi trigger chahiye
+        value: .liketect
